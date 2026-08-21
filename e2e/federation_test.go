@@ -208,7 +208,7 @@ func TestFederation(t *testing.T) {
 		assertExactlyOneDSSReference(t, intentID)
 
 		startCtx, startCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := testStack.StartAPI(startCtx); err != nil {
+		if err := testStack.StartReplacementAPI(startCtx); err != nil {
 			startCancel()
 			t.Fatal(err)
 		}
