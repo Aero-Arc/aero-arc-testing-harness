@@ -22,6 +22,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-test-harness/environments/docker"
 	"github.com/Aero-Arc/aero-arc-test-harness/faults"
 	fixturefaults "github.com/Aero-Arc/aero-arc-test-harness/faults/fixture"
+	toxiproxyfaults "github.com/Aero-Arc/aero-arc-test-harness/faults/toxiproxy"
 	"github.com/Aero-Arc/aero-arc-test-harness/internal/fixture"
 	"github.com/Aero-Arc/aero-arc-test-harness/reports"
 )
@@ -110,6 +111,121 @@ func TestFederation(t *testing.T) {
 		changeDSSOVNOutsideAeroArc(t, intentID)
 		withdrawAndAwaitConvergence(t, intentID)
 		assertStaleOVNWasRejectedBeforeRecovery(t, intentID)
+	})
+
+	t.Run("peer_500_fails_closed_then_recovers", func(t *testing.T) {
+		resetFederation(t)
+		intentID := "88888888-8888-4888-8888-888888888888"
+		peerID := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+		createSubmittedIntent(t, intentID)
+		createNonOverlappingPeerReference(t, peerID)
+		clearPeerFault := armPeerDetailsFailures(t, 10)
+
+		result := postExpect(t, "/api/v1/operational-intents/"+intentID+"/deconfliction/check", nil, http.StatusOK)
+		if result["posture"] != "indeterminate" {
+			t.Fatalf("deconfliction posture = %#v, want indeterminate", result["posture"])
+		}
+		assertDurableIndeterminateFinding(t, intentID)
+		recordCheckpoint(t, "then", "peer failure produced an indeterminate posture", "pass", map[string]any{"posture": result["posture"]})
+
+		postExpect(t, "/api/v1/operational-intents/"+intentID+"/accept", nil, http.StatusOK)
+		awaitCoordination(t, intentID, func(value map[string]any) bool { return value["sync_status"] == "retrying" })
+		postExpect(t, "/api/v1/operational-intents/"+intentID+"/activate", nil, http.StatusConflict)
+		assertNoDSSReference(t, intentID)
+		assertLocalStatus(t, intentID, "accepted")
+		clearPeerFault()
+		recordCheckpoint(t, "when", "peer details recovered", "pass", nil)
+
+		awaitCoordination(t, intentID, func(value map[string]any) bool {
+			return value["sync_status"] == "confirmed" && value["confirmed_state"] == "Accepted"
+		})
+		recordCheckpoint(t, "then", "publication recovered after bounded peer failures", "pass", nil)
+	})
+
+	t.Run("DSS_latency_through_Toxiproxy_recovers", func(t *testing.T) {
+		resetFederation(t)
+		intentID := "99999999-9999-4999-8999-999999999999"
+		createSubmittedIntent(t, intentID)
+		injector := toxiproxyfaults.New(testStack.Toxiproxy, "dss")
+		receipt, err := injector.Enable(context.Background(), faults.Fault{
+			Name: "dss_downstream_latency", Kind: faults.Latency, Target: "dss", Duration: 1500 * time.Millisecond,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		faultEnabled := true
+		t.Cleanup(func() {
+			if faultEnabled {
+				_ = injector.Disable(context.Background(), receipt)
+			}
+		})
+		recordCheckpoint(t, "given", "DSS responses exceed the API request timeout", "pass", map[string]any{"fault": receipt.Fault})
+
+		postExpect(t, "/api/v1/operational-intents/"+intentID+"/accept", nil, http.StatusOK)
+		awaitCoordination(t, intentID, func(value map[string]any) bool { return value["sync_status"] == "retrying" })
+		assertNoDSSReference(t, intentID)
+		if err := injector.Disable(context.Background(), receipt); err != nil {
+			t.Fatal(err)
+		}
+		faultEnabled = false
+		recordCheckpoint(t, "when", "DSS latency fault removed", "pass", nil)
+
+		awaitCoordination(t, intentID, func(value map[string]any) bool {
+			return value["sync_status"] == "confirmed" && value["confirmed_state"] == "Accepted"
+		})
+		recordCheckpoint(t, "then", "publication recovered after network latency", "pass", nil)
+	})
+
+	t.Run("worker_death_waits_for_lease_then_recovers", func(t *testing.T) {
+		resetFederation(t)
+		intentID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+		createSubmittedIntent(t, intentID)
+		dropNextDSSCreateResponseAfterCommit(t)
+		armFixtureLatency(t, fixture.OperationGetReference, 10*time.Second, 1)
+		postExpect(t, "/api/v1/operational-intents/"+intentID+"/accept", nil, http.StatusOK)
+		awaitFixtureEvent(t, intentID, fixture.OperationCreateReference, 5*time.Second)
+		leaseUntil := publicationLeaseUntil(t, intentID)
+
+		apiRunning := true
+		t.Cleanup(func() {
+			if apiRunning {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := testStack.StartAPI(ctx); err != nil {
+				t.Errorf("restore API after worker-death scenario: %v", err)
+			}
+		})
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := testStack.StopAPI(stopCtx); err != nil {
+			stopCancel()
+			t.Fatal(err)
+		}
+		stopCancel()
+		apiRunning = false
+		recordCheckpoint(t, "when", "API worker stopped after remote commit", "pass", map[string]any{"lease_until": leaseUntil})
+		assertExactlyOneDSSReference(t, intentID)
+
+		startCtx, startCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := testStack.StartAPI(startCtx); err != nil {
+			startCancel()
+			t.Fatal(err)
+		}
+		startCancel()
+		apiRunning = true
+		assertNoDSSMutationBefore(t, intentID, leaseUntil)
+		coordination := awaitCoordinationWithin(t, intentID, 50*time.Second, func(value map[string]any) bool {
+			return value["sync_status"] == "confirmed" && value["confirmed_state"] == "Accepted"
+		})
+		if attempts, _ := coordination["attempt_count"].(float64); attempts < 2 {
+			t.Fatalf("attempt_count = %v, want lease takeover attempt", coordination["attempt_count"])
+		}
+		assertTakeoverMutationsFollowLease(t, intentID, leaseUntil)
+		assertExactlyOneDSSReference(t, intentID)
+		recordCheckpoint(t, "then", "expired lease allowed idempotent worker takeover", "pass", map[string]any{
+			"attempt_count": coordination["attempt_count"], "lease_until": leaseUntil,
+		})
 	})
 }
 
@@ -222,6 +338,70 @@ func dropNextDSSCreateResponseAfterCommit(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = injector.Disable(context.Background(), receipt) })
 	recordCheckpoint(t, "given", "DSS create response will be dropped after commit", "pass", map[string]any{"fault": receipt.Fault})
+}
+
+func armPeerDetailsFailures(t *testing.T, count int) func() {
+	t.Helper()
+	injector := fixturefaults.New(testStack.FixtureControlURL)
+	receipt, err := injector.Enable(context.Background(), faults.Fault{
+		Name: "peer_details_500", Kind: faults.HTTPStatus, Target: "peer",
+		Operation: fixture.OperationPeerDetails, Count: count,
+		Attributes: map[string]any{"status": http.StatusInternalServerError},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := true
+	disable := func() {
+		if !enabled {
+			return
+		}
+		if err := injector.Disable(context.Background(), receipt); err != nil {
+			t.Errorf("clear peer details fault: %v", err)
+			return
+		}
+		enabled = false
+	}
+	t.Cleanup(disable)
+	recordCheckpoint(t, "given", "peer details return bounded 500 responses", "pass", map[string]any{"fault": receipt.Fault})
+	return disable
+}
+
+func armFixtureLatency(t *testing.T, operation string, latency time.Duration, count int) {
+	t.Helper()
+	injector := fixturefaults.New(testStack.FixtureControlURL)
+	receipt, err := injector.Enable(context.Background(), faults.Fault{
+		Name: "delay_" + strings.ReplaceAll(operation, ".", "_"), Kind: faults.Latency,
+		Target: "fixture", Operation: operation, Count: count, Duration: latency,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = injector.Disable(context.Background(), receipt) })
+}
+
+func createNonOverlappingPeerReference(t *testing.T, intentID string) {
+	t.Helper()
+	start := time.Now().UTC().Add(20 * time.Minute).Truncate(time.Second)
+	end := start.Add(40 * time.Minute)
+	extent := map[string]any{
+		"time_start": map[string]any{"format": "RFC3339", "value": start},
+		"time_end":   map[string]any{"format": "RFC3339", "value": end},
+		"volume": map[string]any{
+			"outline_polygon": map[string]any{"vertices": []map[string]any{
+				{"lat": 32.0, "lng": -96.0}, {"lat": 32.0, "lng": -95.9},
+				{"lat": 32.1, "lng": -95.9}, {"lat": 32.1, "lng": -96.0},
+			}},
+			"altitude_lower": map[string]any{"value": 30, "reference": "W84", "units": "M"},
+			"altitude_upper": map[string]any{"value": 90, "reference": "W84", "units": "M"},
+		},
+	}
+	requestExpect(t, http.MethodPut,
+		testStack.FixtureControlURL+"/dss/v1/operational_intent_references/"+intentID,
+		map[string]any{"state": "Accepted", "uss_base_url": "http://fixture:8081", "extents": []any{extent}},
+		http.StatusCreated,
+	)
+	recordCheckpoint(t, "given", "non-overlapping peer reference exists", "pass", map[string]any{"peer_intent_id": intentID})
 }
 
 func assertReconciliationRecoveredOVN(t *testing.T, coordination map[string]any) {
@@ -337,7 +517,12 @@ func createSubmittedIntent(t *testing.T, intentID string) {
 
 func awaitCoordination(t *testing.T, intentID string, ready func(map[string]any) bool) map[string]any {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	return awaitCoordinationWithin(t, intentID, 20*time.Second, ready)
+}
+
+func awaitCoordinationWithin(t *testing.T, intentID string, timeout time.Duration, ready func(map[string]any) bool) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
 	delay := 50 * time.Millisecond
 	var last map[string]any
 	lastTransition := ""
@@ -368,6 +553,163 @@ func awaitCoordination(t *testing.T, intentID string, ready func(map[string]any)
 	}
 	t.Fatalf("coordination did not converge: %#v", last)
 	return nil
+}
+
+func assertNoDSSReference(t *testing.T, intentID string) {
+	t.Helper()
+	for _, reference := range fixtureReferences(t) {
+		if reference["id"] == intentID {
+			t.Fatalf("DSS reference exists for %s while publication must fail closed", intentID)
+		}
+	}
+	recordCheckpoint(t, "then", "failed coordination did not publish a DSS reference", "pass", map[string]any{"intent_id": intentID})
+}
+
+func assertLocalStatus(t *testing.T, intentID, expected string) {
+	t.Helper()
+	pool, err := pgxpool.New(context.Background(), testStack.DatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var status string
+	if err := pool.QueryRow(context.Background(), `
+		SELECT data->>'status' FROM operational_intents
+		WHERE id = $1 ORDER BY version DESC LIMIT 1`, intentID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != expected {
+		t.Fatalf("local status = %q, want %q", status, expected)
+	}
+	recordCheckpoint(t, "then", "local workflow remained fail closed", "pass", map[string]any{"local_status": status})
+}
+
+func assertDurableIndeterminateFinding(t *testing.T, intentID string) {
+	t.Helper()
+	pool, err := pgxpool.New(context.Background(), testStack.DatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var findings int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM conflict_findings
+		WHERE intent_id = $1 AND data->>'status' = 'indeterminate'`, intentID).Scan(&findings); err != nil {
+		t.Fatal(err)
+	}
+	if findings == 0 {
+		t.Fatal("peer failure did not produce a durable indeterminate finding")
+	}
+	peerFailures := 0
+	for _, event := range fixtureEvents(t) {
+		if event.Operation == fixture.OperationPeerDetails && event.Status == http.StatusInternalServerError {
+			peerFailures++
+		}
+	}
+	if peerFailures == 0 {
+		t.Fatal("fixture journal did not record the peer failure")
+	}
+	recordCheckpoint(t, "then", "durable finding matches peer failure journal", "pass", map[string]any{
+		"indeterminate_findings": findings, "peer_500_events": peerFailures,
+	})
+}
+
+func publicationLeaseUntil(t *testing.T, intentID string) time.Time {
+	t.Helper()
+	pool, err := pgxpool.New(context.Background(), testStack.DatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var leaseUntil *time.Time
+	var syncStatus string
+	if err := pool.QueryRow(context.Background(), `
+		SELECT lease_until, sync_status FROM operational_intent_publications
+		WHERE intent_id = $1`, intentID).Scan(&leaseUntil, &syncStatus); err != nil {
+		t.Fatal(err)
+	}
+	if leaseUntil == nil || syncStatus != "processing" {
+		t.Fatalf("publication lease = %v status = %q, want active processing lease", leaseUntil, syncStatus)
+	}
+	return leaseUntil.UTC()
+}
+
+func awaitFixtureEvent(t *testing.T, intentID, operation string, timeout time.Duration) fixture.Event {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	delay := 25 * time.Millisecond
+	for time.Now().Before(deadline) {
+		for _, event := range fixtureEvents(t) {
+			if event.IntentID == intentID && event.Operation == operation {
+				recordCheckpoint(t, "observe", "fixture operation observed", "observed", map[string]any{
+					"operation": operation, "sequence": event.Sequence, "status": event.Status,
+				})
+				return event
+			}
+		}
+		time.Sleep(delay)
+		if delay < 250*time.Millisecond {
+			delay *= 2
+			if delay > 250*time.Millisecond {
+				delay = 250 * time.Millisecond
+			}
+		}
+	}
+	t.Fatalf("fixture operation %s for %s was not observed", operation, intentID)
+	return fixture.Event{}
+}
+
+func assertNoDSSMutationBefore(t *testing.T, intentID string, leaseUntil time.Time) {
+	t.Helper()
+	observationEnd := time.Now().Add(2 * time.Second)
+	if leaseUntil.Before(observationEnd) {
+		observationEnd = leaseUntil
+	}
+	delay := 50 * time.Millisecond
+	for time.Now().Before(observationEnd) {
+		events := dssMutationEvents(t, intentID)
+		for _, event := range events[1:] {
+			if event.At.Before(leaseUntil) {
+				t.Fatalf("DSS mutation %s at %s occurred before lease expiry %s", event.Operation, event.At, leaseUntil)
+			}
+		}
+		time.Sleep(delay)
+		if delay < 500*time.Millisecond {
+			delay *= 2
+			if delay > 500*time.Millisecond {
+				delay = 500 * time.Millisecond
+			}
+		}
+	}
+	recordCheckpoint(t, "then", "replacement worker respected the live lease", "pass", map[string]any{"lease_until": leaseUntil})
+}
+
+func assertTakeoverMutationsFollowLease(t *testing.T, intentID string, leaseUntil time.Time) {
+	t.Helper()
+	events := dssMutationEvents(t, intentID)
+	if len(events) < 2 {
+		t.Fatalf("DSS mutation events = %d, want recovery activity after worker restart", len(events))
+	}
+	for _, event := range events[1:] {
+		if event.At.Before(leaseUntil) {
+			t.Fatalf("takeover mutation %s at %s preceded lease expiry %s", event.Operation, event.At, leaseUntil)
+		}
+	}
+}
+
+func dssMutationEvents(t *testing.T, intentID string) []fixture.Event {
+	t.Helper()
+	var result []fixture.Event
+	for _, event := range fixtureEvents(t) {
+		if event.IntentID != intentID {
+			continue
+		}
+		switch event.Operation {
+		case fixture.OperationCreateReference, fixture.OperationUpdateReference, fixture.OperationDeleteReference:
+			result = append(result, event)
+		}
+	}
+	return result
 }
 
 func newProbe(t *testing.T) *assertions.Probe {

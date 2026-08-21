@@ -179,7 +179,6 @@ func Start(ctx context.Context, config Config) (_ *Stack, err error) {
 			"AERO_API_USS_JWT_PUBLIC_KEY_FILE": "/uss-auth-public.pem",
 			"AERO_API_USS_JWT_ISSUER":          "e2e-fixture", "AERO_API_USS_JWT_AUDIENCE": "aero-arc-api",
 			"AERO_API_TELEMETRY_STORE": "memory", "AERO_API_REPLAY_STORE": "memory", "AERO_API_REGISTRY_MODE": "memory",
-			"AERO_API_SEED": "demo",
 		},
 		Files: []testcontainers.ContainerFile{{
 			HostFilePath:      filepath.Join(config.RootDir, "testdata", "keys", "uss-auth-public.pem"),
@@ -205,6 +204,62 @@ func Start(ctx context.Context, config Config) (_ *Stack, err error) {
 		return nil, err
 	}
 	return stack, nil
+}
+
+// StopAPI stops the real API process without removing its container or any
+// durable state. A zero grace period models abrupt worker loss.
+func (stack *Stack) StopAPI(ctx context.Context) error {
+	api := stack.containers["aero-arc-api"]
+	if api == nil {
+		return fmt.Errorf("Aero Arc API container is not available")
+	}
+	grace := time.Duration(0)
+	if err := api.Stop(ctx, &grace); err != nil {
+		return fmt.Errorf("stop Aero Arc API: %w", err)
+	}
+	return nil
+}
+
+// StartAPI restarts a previously stopped API container and waits for semantic
+// readiness before returning it to the scenario.
+func (stack *Stack) StartAPI(ctx context.Context) error {
+	api := stack.containers["aero-arc-api"]
+	if api == nil {
+		return fmt.Errorf("Aero Arc API container is not available")
+	}
+	if api.IsRunning() {
+		return nil
+	}
+	if err := api.Start(ctx); err != nil {
+		return fmt.Errorf("start Aero Arc API: %w", err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, stack.APIBaseURL+"/readyz", nil)
+	if err != nil {
+		return fmt.Errorf("create API readiness request: %w", err)
+	}
+	delay := 50 * time.Millisecond
+	for {
+		response, requestErr := http.DefaultClient.Do(request.Clone(ctx))
+		if requestErr == nil {
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("wait for restarted Aero Arc API readiness: %w", ctx.Err())
+		case <-timer.C:
+			if delay < time.Second {
+				delay *= 2
+				if delay > time.Second {
+					delay = time.Second
+				}
+			}
+		}
+	}
 }
 
 func startContainer(ctx context.Context, testNetwork *testcontainers.DockerNetwork, alias string, request testcontainers.ContainerRequest) (testcontainers.Container, error) {

@@ -1,3 +1,4 @@
+# Design record only; executable coverage lives in TestFederation.
 schema_version: 1
 name: lost_dss_create_response
 description: DSS commits a create and the response is lost before Aero Arc receives it.

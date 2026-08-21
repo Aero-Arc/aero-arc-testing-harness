@@ -7,6 +7,13 @@ the real Aero Arc API from a sibling checkout, starts isolated dependencies with
 Testcontainers, injects repeatable faults, asserts safety invariants, and writes
 an evidence bundle for humans and CI.
 
+Today this is a fixture-backed federation safety harness, not a complete
+InterUSS conformance lab. It runs the real API against isolated PostGIS and a
+deterministic DSS/peer fixture, injects ambiguous coordination failures, checks
+cross-system invariants, and produces replayable evidence bundles. The next
+fidelity milestone is replacing the fixture with a real InterUSS DSS between
+two independently provisioned Aero Arc USS instances.
+
 ## What the first slice covers
 
 - real `aero-arc-api` container built from local source;
@@ -19,6 +26,11 @@ an evidence bundle for humans and CI.
 - JSONL events, raw `go test -json`, JSON summary, Markdown summary, JUnit XML,
   and failure-time container logs;
 - optional Chaos Mesh workflows for Kubernetes-only faults.
+
+The executable fixture tier currently covers happy-path activation, a lost DSS
+create response, stale-OVN withdrawal, peer-detail `500` fail-closed recovery,
+DSS latency through Toxiproxy, worker death and lease-expiry takeover, and
+tripwires that prove the invariant checker rejects known-bad states.
 
 The deterministic fixture is for failure semantics and orchestration speed. A
 real InterUSS DSS profile remains a separate fidelity gate; passing the fixture
@@ -48,6 +60,12 @@ scripts/repeat-e2e.sh    Multi-run determinism check and aggregate report
 
 No host ports are fixed. Concurrent runs are isolated by Testcontainers network
 and resource labels.
+
+`AERO_ARC_E2E_SEED` is currently provenance: it identifies artifact paths,
+resource labels, and manifests so a run can be correlated and selected again.
+The fixture scenarios themselves contain no random choices yet. When seeded
+variation is introduced, the same value will drive that variation; until then,
+reports must not imply that changing the seed changes scenario behavior.
 
 ## Quick start
 
@@ -95,7 +113,7 @@ allocated endpoints, and the recorded seed.
 | Tier | Runs | Purpose |
 | --- | --- | --- |
 | Unit | every change | Fixture, report, retry, and control-plane correctness |
-| Docker E2E | PR/nightly | Real API + PostGIS + fixture + Toxiproxy |
+| Docker E2E | PR/scheduled/manual | Real API + PostGIS + fixture + Toxiproxy |
 | Real DSS | nightly/release | Aero Arc against the pinned local InterUSS DSS sandbox |
 | Chaos Mesh | scheduled/manual | Pod, network, DNS, clock, I/O, and resource failures |
 
@@ -118,6 +136,11 @@ Every scenario follows the same phases:
 
 Start with one fault at a time. Multi-fault scenarios belong in a separate soak
 suite after each individual failure has a deterministic oracle.
+
+The YAML files under `scenarios/` are design records, not executable inputs.
+The tagged Go tests are the source of truth for current coverage. Converting the
+YAML catalog into executable input would require a separate, versioned compiler
+and validation milestone; until then each YAML file links to its Go test status.
 
 ## Result bundle
 
