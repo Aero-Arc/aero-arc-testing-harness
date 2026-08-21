@@ -80,17 +80,45 @@ func BlockedVersionHasNoDSSReference(snapshot Snapshot) Result {
 	return result
 }
 
-// Probe compares PostgreSQL state with the deterministic DSS control plane.
-// A separate adapter will provide the same Snapshot contract for a real DSS.
+// DSSReference is the authoritative remote state used by invariant probes.
+type DSSReference struct {
+	Exists     bool
+	Version    int
+	State      string
+	OVN        string
+	Manager    string
+	USSBaseURL string
+}
+
+// DSSReferenceObserver reads one operational-intent reference from a DSS
+// authority without relying on the Aero Arc API's publication receipt.
+type DSSReferenceObserver interface {
+	ObserveDSSReference(context.Context, string) (DSSReference, error)
+}
+
+// Probe compares PostgreSQL state with an independently observed DSS reference.
 type Probe struct {
 	database *pgxpool.Pool
-	dssURL   string
-	http     *http.Client
+	dss      DSSReferenceObserver
 	now      func() time.Time
 }
 
-// NewProbe connects to the authoritative local database.
+// NewProbe connects to the authoritative local database and deterministic DSS
+// fixture. Existing fixture-backed scenarios use this convenience constructor.
 func NewProbe(ctx context.Context, databaseURL, dssControlURL string) (*Probe, error) {
+	return NewProbeWithObserver(ctx, databaseURL, &fixtureDSSObserver{
+		baseURL: strings.TrimRight(dssControlURL, "/"),
+		http:    &http.Client{Timeout: 5 * time.Second},
+	})
+}
+
+// NewProbeWithObserver connects the invariant probe to a local database and a
+// profile-specific DSS observer. The invariant functions and Snapshot contract
+// remain identical across fixture and real-InterUSS profiles.
+func NewProbeWithObserver(ctx context.Context, databaseURL string, dss DSSReferenceObserver) (*Probe, error) {
+	if dss == nil {
+		return nil, fmt.Errorf("DSS reference observer is required")
+	}
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("connect invariant probe database: %w", err)
@@ -99,10 +127,7 @@ func NewProbe(ctx context.Context, databaseURL, dssControlURL string) (*Probe, e
 		pool.Close()
 		return nil, fmt.Errorf("ping invariant probe database: %w", err)
 	}
-	return &Probe{
-		database: pool, dssURL: strings.TrimRight(dssControlURL, "/"),
-		http: &http.Client{Timeout: 5 * time.Second}, now: time.Now,
-	}, nil
+	return &Probe{database: pool, dss: dss, now: time.Now}, nil
 }
 
 // Close releases the database pool.
@@ -137,40 +162,58 @@ func (probe *Probe) Snapshot(ctx context.Context, intentID string) (Snapshot, er
 			snapshot.PublicationOVN = *ovn
 		}
 	}
-	request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, probe.dssURL+"/control/state", nil)
-	if requestErr != nil {
-		return Snapshot{}, requestErr
+	reference, err := probe.dss.ObserveDSSReference(ctx, intentID)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("query DSS reference: %w", err)
 	}
-	response, requestErr := probe.http.Do(request)
-	if requestErr != nil {
-		return Snapshot{}, fmt.Errorf("query DSS state: %w", requestErr)
+	snapshot.DSSReferenceExists = reference.Exists
+	snapshot.DSSVersion = reference.Version
+	snapshot.DSSState = reference.State
+	snapshot.DSSOVN = reference.OVN
+	return snapshot, nil
+}
+
+type fixtureDSSObserver struct {
+	baseURL string
+	http    *http.Client
+}
+
+func (observer *fixtureDSSObserver) ObserveDSSReference(ctx context.Context, intentID string) (DSSReference, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, observer.baseURL+"/control/state", nil)
+	if err != nil {
+		return DSSReference{}, err
+	}
+	response, err := observer.http.Do(request)
+	if err != nil {
+		return DSSReference{}, fmt.Errorf("query fixture state: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return Snapshot{}, fmt.Errorf("query DSS state returned %d", response.StatusCode)
+		return DSSReference{}, fmt.Errorf("query fixture state returned %d", response.StatusCode)
 	}
 	var body struct {
 		References []struct {
-			ID      string `json:"id"`
-			Version int    `json:"version"`
-			State   string `json:"state"`
-			OVN     string `json:"ovn"`
+			ID         string `json:"id"`
+			Version    int    `json:"version"`
+			State      string `json:"state"`
+			OVN        string `json:"ovn"`
+			Manager    string `json:"manager"`
+			USSBaseURL string `json:"uss_base_url"`
 		} `json:"operational_intent_references"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
-		return Snapshot{}, fmt.Errorf("decode DSS state: %w", err)
+		return DSSReference{}, fmt.Errorf("decode fixture state: %w", err)
 	}
 	for _, reference := range body.References {
 		if reference.ID != intentID {
 			continue
 		}
-		snapshot.DSSReferenceExists = true
-		snapshot.DSSVersion = reference.Version
-		snapshot.DSSState = reference.State
-		snapshot.DSSOVN = reference.OVN
-		break
+		return DSSReference{
+			Exists: true, Version: reference.Version, State: reference.State,
+			OVN: reference.OVN, Manager: reference.Manager, USSBaseURL: reference.USSBaseURL,
+		}, nil
 	}
-	return snapshot, nil
+	return DSSReference{}, nil
 }
 
 // Eventually samples the system until all checks pass or the context expires.

@@ -1,0 +1,54 @@
+name: real-dss
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/real-dss.yml"
+      - "assertions/**"
+      - "e2e/real_dss_test.go"
+      - "environments/realdss/**"
+      - "internal/realdss/**"
+      - "scripts/run-real-dss-e2e.sh"
+  workflow_dispatch:
+  schedule:
+    - cron: "41 8 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  real-dss-two-uss:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: aero-arc-test-harness
+      - uses: actions/checkout@v4
+        with:
+          repository: Aero-Arc/aero-arc-api
+          path: aero-arc-api
+      - uses: actions/checkout@v4
+        with:
+          repository: Aero-Arc/interuss-dss
+          ref: 7f0c6f47318249ae3acc78d752fa4ff88b00c085
+          path: interuss-dss
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: aero-arc-test-harness/go.mod
+          cache-dependency-path: aero-arc-test-harness/go.sum
+      - name: Run real InterUSS and two-USS scenarios
+        working-directory: aero-arc-test-harness
+        env:
+          AERO_ARC_API_SOURCE: ${{ github.workspace }}/aero-arc-api
+          AERO_ARC_INTERUSS_SOURCE: ${{ github.workspace }}/interuss-dss
+          AERO_ARC_INTERUSS_REVISION: 7f0c6f47318249ae3acc78d752fa4ff88b00c085
+        run: ./scripts/run-real-dss-e2e.sh
+      - name: Upload real-DSS evidence bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aero-arc-real-dss-${{ github.run_id }}
+          path: aero-arc-test-harness/artifacts/
+          if-no-files-found: error
+          retention-days: 21

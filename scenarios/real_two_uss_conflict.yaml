@@ -1,0 +1,25 @@
+# Design record; executable coverage lives in TestRealFederation.
+schema_version: 1
+name: independent_uss_b_conflict_blocks_uss_a_publication
+status: implemented_real_dss
+description: Two independent Aero Arc USS instances coordinate through a real InterUSS DSS and an authenticated USS-USS detail request.
+timeout: 45s
+given:
+  - uss_b_operation: real_dss_confirmed_accepted
+  - uss_b_authority: independent_aero_arc_api_and_postgis
+when:
+  - uss_a_operation: submitted_with_overlapping_4d_volume
+  - action: query_real_dss_and_fetch_authenticated_uss_b_details
+  - action: accept_uss_a_operation
+then:
+  - invariant: uss_a_posture_is_potential_conflict
+  - invariant: blocked_uss_a_version_absent_from_real_dss
+  - invariant: uss_a_cannot_activate
+evidence:
+  - uss_a.postgres.operational_intent_publications
+  - uss_a.postgres.conflict_findings
+  - uss_b.postgres.operational_intents
+  - interuss_dss.operational_intent_reference
+implementation:
+  tier: real_dss
+  go_test: TestRealFederation/independent_USS_B_conflict_blocks_USS_A_publication

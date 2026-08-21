@@ -12,15 +12,20 @@ The default Testcontainers environment starts:
 - one deterministic DSS + peer-USS fixture;
 - one Toxiproxy hop on the DSS path.
 
-The next fidelity increment is a second Aero Arc API/PostGIS pair so the same
-scenario can run Aero Arc USS-A against Aero Arc USS-B.
+## `realdss`
 
-## Real InterUSS DSS
+The protocol-fidelity Testcontainers environment starts:
 
-The real-DSS gate will compose the sibling `../interuss-dss` sandbox (pinned
-CockroachDB, migrations, DSS core, and dummy OAuth) and replace only the DSS
-adapter. Scenarios and invariant checks remain unchanged. This is intentionally
-separate from the fast deterministic fixture tier.
+- one pinned InterUSS CockroachDB node;
+- the real InterUSS SCD migration and core-service image built from source;
+- the InterUSS dummy-OAuth service and test signing key;
+- Aero Arc USS-A with its own PostGIS;
+- Aero Arc USS-B with a separate PostGIS.
+
+Both USS instances use distinct OAuth subjects, advertise independent USS base
+URLs, and communicate only through the real DSS and authenticated USS-USS HTTP
+routes. A direct observer token queries the DSS independently for invariant
+evidence. This tier is intentionally separate from the deterministic fixture.
 
 ## Kubernetes
 

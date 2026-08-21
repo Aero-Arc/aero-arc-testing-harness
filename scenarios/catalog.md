@@ -9,7 +9,7 @@ the human-oriented [test authoring guide](../docs/ADDING_TESTS.md).
 
 ## `federated_conflict_blocks_publication`
 
-Status: **planned fixture scenario**.
+Status: **implemented in the real-DSS/two-USS tier**.
 
 **Given** USS-B owns an Accepted operation and Aero Arc USS-A proposes an
 overlapping operation.
@@ -21,6 +21,24 @@ normalized candidate set.
 and cannot activate locally.
 
 Invariant: `publication blocked => no DSS reference for desired version`.
+
+The executable case also proves the conflict finding's provenance identifies
+the authenticated `uss-b` detail endpoint returned by the real InterUSS DSS.
+
+## `real_interuss_activation_and_withdrawal`
+
+Status: **implemented in the real-DSS/two-USS tier**.
+
+**Given** USS-A has an isolated submitted operation and uses OAuth-authenticated
+InterUSS SCD publication.
+
+**When** USS-A accepts, activates, and later cancels the operation.
+
+**Then** local Active is backed by the same local intent version confirmed
+Activated by the real DSS, the reference identifies USS-A as manager, and the
+terminal local state converges to DSS withdrawal.
+
+Invariant: `local Active => same intent version confirmed Activated in real DSS`.
 
 ## `lost_dss_create_response`
 
