@@ -1,0 +1,27 @@
+# Design record only; executable coverage lives in TestFederation.
+schema_version: 1
+name: peer_500_fails_closed
+description: Peer detail failures remain indeterminate and publication recovers only after the peer is healthy.
+timeout: 30s
+given:
+  - peer_operation: accepted_and_non_overlapping
+  - uss_a_operation: submitted
+when:
+  - arm_fault:
+      behavior: http_status
+      target: peer
+      operation: peer.get_details
+      status: 500
+      count: 10
+  - action: check_and_accept_uss_a_operation
+then:
+  - invariant: provider_unavailable_posture_is_not_clear
+  - invariant: local_activation_remains_blocked
+  - invariant: desired_version_absent_from_dss_during_failure
+  - invariant: publication_converges_after_peer_recovers
+evidence:
+  - postgres.operational_intents
+  - postgres.operational_intent_publications
+  - postgres.conflict_findings
+  - dss.reference
+  - fixture.request_journal

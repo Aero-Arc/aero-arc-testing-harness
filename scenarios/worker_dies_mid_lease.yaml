@@ -1,0 +1,30 @@
+# Design record only; executable coverage lives in TestFederation.
+schema_version: 1
+name: worker_dies_mid_lease
+description: The API dies after a remote commit and a replacement process waits for lease expiry before recovery.
+timeout: 60s
+given:
+  - uss_a_operation: accepted_with_publication_pending
+when:
+  - arm_fault:
+      behavior: drop_response_after_commit
+      target: dss
+      operation: dss.create_reference
+      count: 1
+  - arm_fault:
+      behavior: latency
+      target: dss
+      operation: dss.get_reference
+      duration: 10s
+      count: 1
+  - action: stop_api_after_remote_commit
+  - action: restart_api_with_preserved_postgres
+then:
+  - invariant: replacement_worker_respects_live_lease
+  - invariant: publication_converges_after_lease_expiry
+  - invariant: exactly_one_dss_reference
+evidence:
+  - postgres.operational_intent_publications
+  - dss.reference
+  - fixture.request_journal
+  - aero_arc_api.logs

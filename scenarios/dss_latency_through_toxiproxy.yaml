@@ -1,0 +1,23 @@
+# Design record only; executable coverage lives in TestFederation.
+schema_version: 1
+name: dss_latency_through_toxiproxy
+description: DSS responses exceed the API timeout until the bounded Toxiproxy fault is removed.
+timeout: 30s
+given:
+  - uss_a_operation: submitted_and_clear
+when:
+  - arm_fault:
+      behavior: latency
+      target: dss
+      injector: toxiproxy
+      duration: 1500ms
+  - action: accept_uss_a_operation
+then:
+  - invariant: desired_version_absent_from_dss_during_failure
+  - invariant: publication_enters_retrying
+  - invariant: publication_converges_after_fault_cleanup
+evidence:
+  - postgres.operational_intent_publications
+  - dss.reference
+  - fixture.request_journal
+  - toxiproxy.control

@@ -1,0 +1,25 @@
+# Copy this file to scenarios/<scenario_name>.yaml.
+# Design record only; executable coverage must be added to the tier named below.
+schema_version: 1
+name: replace_with_stable_snake_case_name
+status: planned_fixture
+description: Describe the ambiguous operation and the expected safe outcome.
+timeout: 30s
+given:
+  - baseline: name_the_known_state
+when:
+  - arm_fault:
+      behavior: choose_a_supported_fault
+      target: name_the_dependency
+      count: 1
+  - action: name_the_operation_with_an_uncertain_outcome
+then:
+  - invariant: name_exactly_what_must_never_become_true
+  - convergence: name_the_expected_state_after_fault_cleanup
+evidence:
+  - postgres.name_the_table_or_view
+  - dss.reference
+  - fixture.request_journal
+implementation:
+  tier: fixture
+  go_test: TestFederation/replace_with_subtest_name

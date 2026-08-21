@@ -78,6 +78,7 @@ type Stack struct {
 
 	network    *testcontainers.DockerNetwork
 	containers map[string]testcontainers.Container
+	rootDir    string
 }
 
 // Start creates the complete Docker federation and returns only after every
@@ -100,7 +101,10 @@ func Start(ctx context.Context, config Config) (_ *Stack, err error) {
 		}
 	}
 	runID := fmt.Sprintf("e2e-%d-%d", time.Now().UTC().Unix(), config.Seed)
-	stack := &Stack{RunID: runID, Seed: config.Seed, ArtifactDir: config.ArtifactDir, containers: make(map[string]testcontainers.Container)}
+	stack := &Stack{
+		RunID: runID, Seed: config.Seed, ArtifactDir: config.ArtifactDir,
+		containers: make(map[string]testcontainers.Container), rootDir: config.RootDir,
+	}
 	defer func() {
 		if err != nil {
 			_ = stack.Capture(ctx)
@@ -169,22 +173,8 @@ func Start(ctx context.Context, config Config) (_ *Stack, err error) {
 		FromDockerfile: testcontainers.FromDockerfile{
 			Context: config.APISource, Dockerfile: "Dockerfile", Repo: "aero-arc-api", Tag: "e2e", KeepImage: true,
 		},
-		Env: map[string]string{
-			"AERO_API_ADDR": ":8080", "AERO_API_DURABLE_STORE": "postgres",
-			"AERO_API_DATABASE_URL":       "postgres://aero_arc:aero_arc_test@postgis:5432/aero_arc?sslmode=disable",
-			"AERO_API_AIRSPACE_PROVIDERS": "local,interuss",
-			"AERO_API_DSS_BASE_URL":       "http://toxiproxy:8666", "AERO_API_DSS_STATIC_TOKEN": "e2e-static-token",
-			"AERO_API_DSS_ALLOW_INSECURE_PEER_URLS": "true", "AERO_API_REQUEST_TIMEOUT": "750ms",
-			"AERO_API_USS_BASE_URL":            "http://aero-arc-api:8080",
-			"AERO_API_USS_JWT_PUBLIC_KEY_FILE": "/uss-auth-public.pem",
-			"AERO_API_USS_JWT_ISSUER":          "e2e-fixture", "AERO_API_USS_JWT_AUDIENCE": "aero-arc-api",
-			"AERO_API_TELEMETRY_STORE": "memory", "AERO_API_REPLAY_STORE": "memory", "AERO_API_REGISTRY_MODE": "memory",
-			"AERO_API_SEED": "demo",
-		},
-		Files: []testcontainers.ContainerFile{{
-			HostFilePath:      filepath.Join(config.RootDir, "testdata", "keys", "uss-auth-public.pem"),
-			ContainerFilePath: "/uss-auth-public.pem", FileMode: 0o444,
-		}},
+		Env:          apiEnvironment("demo"),
+		Files:        apiFiles(config.RootDir),
 		ExposedPorts: []string{"8080/tcp"}, Labels: labels,
 		WaitingFor: wait.ForHTTP("/readyz").WithPort("8080/tcp").WithStartupTimeout(config.StartupLimit),
 	})
@@ -205,6 +195,127 @@ func Start(ctx context.Context, config Config) (_ *Stack, err error) {
 		return nil, err
 	}
 	return stack, nil
+}
+
+// StopAPI stops the real API process without removing its container or any
+// durable state. A zero grace period models abrupt worker loss.
+func (stack *Stack) StopAPI(ctx context.Context) error {
+	api := stack.containers["aero-arc-api"]
+	if api == nil {
+		return fmt.Errorf("Aero Arc API container is not available")
+	}
+	grace := time.Duration(0)
+	if err := api.Stop(ctx, &grace); err != nil {
+		return fmt.Errorf("stop Aero Arc API: %w", err)
+	}
+	return nil
+}
+
+// StartAPI restarts a previously stopped API container and waits for semantic
+// readiness before returning it to the scenario.
+func (stack *Stack) StartAPI(ctx context.Context) error {
+	api := stack.containers["aero-arc-api"]
+	if api == nil {
+		return fmt.Errorf("Aero Arc API container is not available")
+	}
+	if api.IsRunning() {
+		return nil
+	}
+	if err := api.Start(ctx); err != nil {
+		return fmt.Errorf("start Aero Arc API: %w", err)
+	}
+	baseURL, err := endpoint(ctx, api, "8080/tcp", "http")
+	if err != nil {
+		return err
+	}
+	stack.APIBaseURL = baseURL
+	return stack.waitForAPI(ctx)
+}
+
+// StartReplacementAPI starts a new API container against the existing
+// PostGIS and DSS state. The stopped container is retained for failure-time log
+// capture, while the replacement receives the stable network alias.
+func (stack *Stack) StartReplacementAPI(ctx context.Context) error {
+	previous := stack.containers["aero-arc-api"]
+	if previous == nil {
+		return fmt.Errorf("Aero Arc API container is not available")
+	}
+	if previous.IsRunning() {
+		return fmt.Errorf("Aero Arc API must be stopped before replacement")
+	}
+	labels := map[string]string{"aero-arc.io/test-run": stack.RunID, "aero-arc.io/seed": fmt.Sprint(stack.Seed)}
+	replacement, err := startContainer(ctx, stack.network, "aero-arc-api", testcontainers.ContainerRequest{
+		Image: "aero-arc-api:e2e", Env: apiEnvironment("none"), Files: apiFiles(stack.rootDir),
+		ExposedPorts: []string{"8080/tcp"}, Labels: labels,
+		WaitingFor: wait.ForHTTP("/readyz").WithPort("8080/tcp").WithStartupTimeout(30 * time.Second),
+	})
+	if err != nil {
+		return fmt.Errorf("start replacement Aero Arc API: %w", err)
+	}
+	baseURL, err := endpoint(ctx, replacement, "8080/tcp", "http")
+	if err != nil {
+		_ = testcontainers.TerminateContainer(replacement)
+		return err
+	}
+	stack.containers["aero-arc-api-crashed"] = previous
+	stack.containers["aero-arc-api"] = replacement
+	stack.APIBaseURL = baseURL
+	if err := stack.writeManifest(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (stack *Stack) waitForAPI(ctx context.Context) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, stack.APIBaseURL+"/readyz", nil)
+	if err != nil {
+		return fmt.Errorf("create API readiness request: %w", err)
+	}
+	delay := 50 * time.Millisecond
+	for {
+		response, requestErr := http.DefaultClient.Do(request.Clone(ctx))
+		if requestErr == nil {
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("wait for restarted Aero Arc API readiness: %w", ctx.Err())
+		case <-timer.C:
+			if delay < time.Second {
+				delay *= 2
+				if delay > time.Second {
+					delay = time.Second
+				}
+			}
+		}
+	}
+}
+
+func apiEnvironment(seed string) map[string]string {
+	return map[string]string{
+		"AERO_API_ADDR": ":8080", "AERO_API_DURABLE_STORE": "postgres",
+		"AERO_API_DATABASE_URL":       "postgres://aero_arc:aero_arc_test@postgis:5432/aero_arc?sslmode=disable",
+		"AERO_API_AIRSPACE_PROVIDERS": "local,interuss",
+		"AERO_API_DSS_BASE_URL":       "http://toxiproxy:8666", "AERO_API_DSS_STATIC_TOKEN": "e2e-static-token",
+		"AERO_API_DSS_ALLOW_INSECURE_PEER_URLS": "true", "AERO_API_REQUEST_TIMEOUT": "750ms",
+		"AERO_API_USS_BASE_URL":            "http://aero-arc-api:8080",
+		"AERO_API_USS_JWT_PUBLIC_KEY_FILE": "/uss-auth-public.pem",
+		"AERO_API_USS_JWT_ISSUER":          "e2e-fixture", "AERO_API_USS_JWT_AUDIENCE": "aero-arc-api",
+		"AERO_API_TELEMETRY_STORE": "memory", "AERO_API_REPLAY_STORE": "memory", "AERO_API_REGISTRY_MODE": "memory",
+		"AERO_API_SEED": seed,
+	}
+}
+
+func apiFiles(rootDir string) []testcontainers.ContainerFile {
+	return []testcontainers.ContainerFile{{
+		HostFilePath:      filepath.Join(rootDir, "testdata", "keys", "uss-auth-public.pem"),
+		ContainerFilePath: "/uss-auth-public.pem", FileMode: 0o444,
+	}}
 }
 
 func startContainer(ctx context.Context, testNetwork *testcontainers.DockerNetwork, alias string, request testcontainers.ContainerRequest) (testcontainers.Container, error) {
@@ -265,7 +376,7 @@ func (stack *Stack) Capture(ctx context.Context) error {
 // Close removes containers in reverse dependency order and then the network.
 func (stack *Stack) Close(ctx context.Context) error {
 	var firstErr error
-	for _, name := range []string{"aero-arc-api", "toxiproxy", "fixture", "postgis"} {
+	for _, name := range []string{"aero-arc-api", "aero-arc-api-crashed", "toxiproxy", "fixture", "postgis"} {
 		container := stack.containers[name]
 		if container == nil {
 			continue

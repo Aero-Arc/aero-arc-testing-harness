@@ -1,3 +1,4 @@
+# Design record only; executable coverage lives in TestFederation.
 schema_version: 1
 name: stale_ovn_withdrawal
 description: Withdrawal starts with an obsolete OVN and recovers by reading current DSS state.
