@@ -7,12 +7,12 @@ the real Aero Arc API from a sibling checkout, starts isolated dependencies with
 Testcontainers, injects repeatable faults, asserts safety invariants, and writes
 an evidence bundle for humans and CI.
 
-Today this is a fixture-backed federation safety harness, not a complete
-InterUSS conformance lab. It runs the real API against isolated PostGIS and a
-deterministic DSS/peer fixture, injects ambiguous coordination failures, checks
-cross-system invariants, and produces replayable evidence bundles. The next
-fidelity milestone is replacing the fixture with a real InterUSS DSS between
-two independently provisioned Aero Arc USS instances.
+Today the harness has two federation profiles, but is not a complete InterUSS
+conformance lab. The fast profile runs the real API against isolated PostGIS and
+a deterministic DSS/peer fixture. The protocol-fidelity profile provisions a
+real InterUSS CockroachDB, SCD migrations, core service, and dummy OAuth between
+two independent Aero Arc API/PostGIS pairs. Both profiles apply the same
+cross-authority invariant functions and produce replayable evidence bundles.
 
 ## What the first slice covers
 
@@ -27,14 +27,19 @@ two independently provisioned Aero Arc USS instances.
   and failure-time container logs;
 - optional Chaos Mesh workflows for Kubernetes-only faults.
 
+The real-DSS tier currently proves that USS-A can activate and withdraw against
+InterUSS while preserving the local-active invariant, and that an independently
+persisted USS-B operation is discovered through the real DSS and authenticated
+USS-USS detail route before blocking an overlapping USS-A publication.
+
 The executable fixture tier currently covers happy-path activation, a lost DSS
 create response, stale-OVN withdrawal, peer-detail `500` fail-closed recovery,
 DSS latency through Toxiproxy, worker death and lease-expiry takeover, and
 tripwires that prove the invariant checker rejects known-bad states.
 
-The deterministic fixture is for failure semantics and orchestration speed. A
-real InterUSS DSS profile remains a separate fidelity gate; passing the fixture
-tier must never be presented as full standards conformance.
+The deterministic fixture is for failure semantics and orchestration speed. The
+real InterUSS profile is a separate protocol-fidelity gate; passing either tier
+must not be presented as full ASTM or InterUSS conformance.
 
 ## Repository layout
 
@@ -43,11 +48,13 @@ cmd/fault-fixture/       Stateful DSS + peer-USS test double
 cmd/e2e-report/          go-test JSON to JSON/Markdown/JUnit reports
 cmd/e2e-repeat-report/   Aggregate repeatability and timing evidence
 internal/stack/          Testcontainers topology and artifact collection
+internal/realdss/        Real InterUSS + two-USS Testcontainers topology
 internal/toxiproxy/      Small, explicit Toxiproxy control client
 e2e/                     Cross-service scenarios and invariant checks
 scenarios/               Scenario catalog and expected safety properties
 deploy/chaos-mesh/       Opt-in Kubernetes chaos workflow
 scripts/run-e2e.sh       Repeatable local/CI entry point
+scripts/run-real-dss-e2e.sh  Protocol-fidelity entry point
 scripts/repeat-e2e.sh    Multi-run determinism check and aggregate report
 ```
 
@@ -56,6 +63,7 @@ scripts/repeat-e2e.sh    Multi-run determinism check and aggregate report
 - Go 1.26.2 or newer;
 - Docker Engine;
 - sibling source checkout at `../aero-arc-api` by default;
+- sibling `../interuss-dss` checkout for the real-DSS tier;
 - enough disk to build the API image and pull pinned test images.
 
 No host ports are fixed. Concurrent runs are isolated by Testcontainers network
@@ -79,6 +87,20 @@ Run the Docker E2E tier:
 
 ```bash
 ./scripts/run-e2e.sh
+```
+
+Run the real InterUSS + two-USS tier:
+
+```bash
+./scripts/run-real-dss-e2e.sh
+```
+
+Override either source checkout when they are not siblings:
+
+```bash
+AERO_ARC_API_SOURCE=/path/to/aero-arc-api \
+AERO_ARC_INTERUSS_SOURCE=/path/to/interuss-dss \
+./scripts/run-real-dss-e2e.sh
 ```
 
 Run the deterministic suite repeatedly and produce aggregate p95/max timing:
@@ -114,7 +136,7 @@ allocated endpoints, and the recorded seed.
 | --- | --- | --- |
 | Unit | every change | Fixture, report, retry, and control-plane correctness |
 | Docker E2E | PR/scheduled/manual | Real API + PostGIS + fixture + Toxiproxy |
-| Real DSS | nightly/release | Aero Arc against the pinned local InterUSS DSS sandbox |
+| Real DSS | relevant PR/nightly/manual | Two Aero Arc USS instances against pinned InterUSS SCD + OAuth |
 | Chaos Mesh | scheduled/manual | Pod, network, DNS, clock, I/O, and resource failures |
 
 The Docker tier is the default development loop. The real-DSS and Kubernetes

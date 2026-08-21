@@ -7,7 +7,9 @@ The harness observes three authorities independently:
 - PostgreSQL owns Aero Arc workflow and reconciliation state.
 - The DSS fixture or real InterUSS DSS owns globally visible reference state,
   OVNs, versions, and subscriptions.
-- The peer fixture owns the request journal for detail fetches and notifications.
+- The peer fixture owns the request journal in the fast tier. In the real tier,
+  USS-B's independent PostGIS and USS-A's durable external finding provide the
+  peer-detail evidence boundary.
 
 Assertions compare these authorities. A response from one service is not used as
 proof of another service's state.
@@ -27,6 +29,24 @@ test process
 All containers share a new Testcontainers bridge network. Only control and
 observation endpoints are mapped to random host ports. The API addresses its
 dependencies by network alias so host-specific routing cannot leak into tests.
+
+The protocol-fidelity topology is independently provisioned:
+
+```text
+USS-A API --> USS-A PostGIS
+    |                 real DSS observer --> InterUSS core --> CockroachDB
+    +--> InterUSS core <-------+
+    |                          |
+    +--> authenticated USS-B details
+                               |
+USS-B API --> USS-B PostGIS ---+
+    |
+    +--> InterUSS dummy OAuth (distinct uss-a / uss-b subjects)
+```
+
+The two API containers share no durable store. InterUSS core, CockroachDB,
+dummy OAuth, both APIs, and both PostGIS containers are owned and cleaned up by
+Testcontainers under one `aero-arc.io/test-run` label.
 
 ## Why both fixture and real DSS tiers exist
 

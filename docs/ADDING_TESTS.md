@@ -14,7 +14,7 @@ a new kind of dependency or evidence source.
 | Fixture protocol or bounded-fault behavior | `internal/fixture/*_test.go` | No |
 | Report parsing or evidence output | `reports/*_test.go` | No |
 | Real API coordination against deterministic dependencies | `e2e/federation_test.go` | Yes |
-| InterUSS protocol fidelity | real-DSS profile (planned) | Yes |
+| InterUSS protocol fidelity | `e2e/real_dss_test.go` | Yes |
 | Pod, DNS, resource, or Kubernetes network failure | `deploy/chaos-mesh/` | Kubernetes |
 
 Do not promote a service-level unit or migration test into this repository. The
@@ -148,6 +148,13 @@ Run a single Docker subtest and retain its evidence bundle:
 ```bash
 AERO_ARC_E2E_RUN='TestFederation/example_failure_fails_closed_then_recovers$' \
   ./scripts/run-e2e.sh
+```
+
+Run a real-DSS/two-USS subtest separately:
+
+```bash
+AERO_ARC_REAL_DSS_E2E_RUN='TestRealFederation/independent_USS_B_conflict' \
+  ./scripts/run-real-dss-e2e.sh
 ```
 
 The run must produce `go-test.json`, summaries, JUnit, timeline events, and a

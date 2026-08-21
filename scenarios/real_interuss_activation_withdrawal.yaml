@@ -1,0 +1,23 @@
+# Design record; executable coverage lives in TestRealFederation.
+schema_version: 1
+name: real_interuss_activation_and_withdrawal
+status: implemented_real_dss
+description: USS-A activates only after real InterUSS confirmation and later converges to confirmed withdrawal.
+timeout: 45s
+given:
+  - uss_a_operation: submitted_and_clear
+  - dss_authority: real_interuss_scd
+when:
+  - action: accept_and_activate_uss_a_operation
+  - action: cancel_uss_a_operation
+then:
+  - invariant: local_active_requires_same_version_real_dss_activated
+  - invariant: real_dss_reference_identifies_uss_a
+  - invariant: terminal_local_state_converges_to_real_dss_withdrawal
+evidence:
+  - uss_a.postgres.operational_intents
+  - uss_a.postgres.operational_intent_publications
+  - interuss_dss.operational_intent_reference
+implementation:
+  tier: real_dss
+  go_test: TestRealFederation/real_InterUSS_activation_and_withdrawal_preserve_invariant

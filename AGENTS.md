@@ -73,6 +73,12 @@ Docker scenarios are opt-in:
 ./scripts/run-e2e.sh
 ```
 
+The real InterUSS/two-USS tier is separate and opt-in:
+
+```bash
+./scripts/run-real-dss-e2e.sh
+```
+
 Verify DCO on the commits being proposed (replace `origin/main` when the base is
 different):
 
