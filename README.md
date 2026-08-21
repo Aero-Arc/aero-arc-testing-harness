@@ -142,6 +142,11 @@ The tagged Go tests are the source of truth for current coverage. Converting the
 YAML catalog into executable input would require a separate, versioned compiler
 and validation milestone; until then each YAML file links to its Go test status.
 
+To add coverage without learning the container internals, follow
+[Adding tests](docs/ADDING_TESTS.md). It includes a copyable scenario record,
+subtest scaffold, the supported helper vocabulary, and the boundary for changes
+that need new fixture or infrastructure work.
+
 ## Result bundle
 
 The result directory is intended to be attached to CI runs or incident reviews:
@@ -156,7 +161,8 @@ stack.json         seed, images, IDs, and allocated endpoints
 logs/*.log         service logs captured before teardown on failure
 ```
 
-See [Architecture](docs/ARCHITECTURE.md) for the trust boundaries and
+See [Architecture](docs/ARCHITECTURE.md) for the trust boundaries,
+[Contributing](CONTRIBUTING.md) for DCO and validation requirements, and
 [Chaos Mesh](deploy/chaos-mesh/README.md) for the Kubernetes tier.
 
 ## License

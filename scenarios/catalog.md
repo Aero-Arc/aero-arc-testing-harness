@@ -4,6 +4,9 @@ This catalog is a set of design records. Scenario YAML is not loaded at runtime;
 the tagged Go tests in `e2e/` are the executable source of truth. Status labels
 below distinguish implemented coverage from the real-DSS roadmap.
 
+New scenarios should start from [`_template.yaml`](_template.yaml) and follow
+the human-oriented [test authoring guide](../docs/ADDING_TESTS.md).
+
 ## `federated_conflict_blocks_publication`
 
 Status: **planned fixture scenario**.
