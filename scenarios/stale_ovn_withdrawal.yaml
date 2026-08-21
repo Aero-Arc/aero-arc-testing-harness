@@ -1,0 +1,18 @@
+schema_version: 1
+name: stale_ovn_withdrawal
+description: Withdrawal starts with an obsolete OVN and recovers by reading current DSS state.
+timeout: 30s
+given:
+  - uss_a_operation: dss_confirmed_accepted
+  - dss_reference: externally_advanced_ovn
+when:
+  - action: cancel_uss_a_operation
+then:
+  - invariant: first_delete_rejected_as_stale
+  - invariant: current_ovn_recovered
+  - invariant: dss_reference_eventually_absent
+  - invariant: publication_converges_withdrawn
+evidence:
+  - postgres.operational_intent_publications
+  - dss.reference
+  - fixture.request_journal

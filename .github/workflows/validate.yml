@@ -1,0 +1,54 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 7 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+
+  docker-e2e:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: aero-arc-test-harness
+      - uses: actions/checkout@v4
+        with:
+          repository: Aero-Arc/aero-arc-api
+          path: aero-arc-api
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: aero-arc-test-harness/go.mod
+          cache-dependency-path: aero-arc-test-harness/go.sum
+      - name: Run deterministic federation scenarios
+        working-directory: aero-arc-test-harness
+        env:
+          AERO_ARC_API_SOURCE: ${{ github.workspace }}/aero-arc-api
+        run: ./scripts/run-e2e.sh
+      - name: Upload evidence bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aero-arc-e2e-${{ github.run_id }}
+          path: aero-arc-test-harness/artifacts/
+          if-no-files-found: error
+          retention-days: 21

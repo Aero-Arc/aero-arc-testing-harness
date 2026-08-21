@@ -1,0 +1,26 @@
+schema_version: 1
+name: lost_dss_create_response
+description: DSS commits a create and the response is lost before Aero Arc receives it.
+timeout: 30s
+given:
+  - uss_b_operation: accepted_and_non_overlapping
+  - uss_a_operation: submitted_and_clear
+  - dss: healthy
+when:
+  - arm_fault:
+      behavior: drop_response_after_commit
+      target: dss
+      operation: dss.create_reference
+      count: 1
+  - action: accept_uss_a_operation
+then:
+  - invariant: exactly_one_dss_reference
+  - invariant: ovn_recovered
+  - invariant: publication_converges_confirmed
+  - invariant: local_active_requires_same_version_dss_activated
+evidence:
+  - postgres.operational_intents
+  - postgres.operational_intent_publications
+  - dss.reference
+  - fixture.request_journal
+  - aero_arc_api.logs
