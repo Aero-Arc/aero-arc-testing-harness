@@ -5,7 +5,7 @@ repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 seed=${AERO_ARC_E2E_SEED:-$(date -u +%s)}
 run_id=$(date -u +%Y%m%dT%H%M%SZ)-${seed}
 artifact_dir=${AERO_ARC_E2E_ARTIFACT_DIR:-${repo_dir}/artifacts/${run_id}}
-test_pattern=${AERO_ARC_E2E_RUN:-'Test(Federation|InvariantTripwires)$'}
+test_pattern=${AERO_ARC_E2E_RUN:-'Test(Federation|InvariantTripwires|Reset)$'}
 
 if ! command -v docker >/dev/null 2>&1; then
   printf 'error: Docker is required for the Aero Arc E2E tier but was not found\n' >&2
