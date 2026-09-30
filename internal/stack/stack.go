@@ -44,8 +44,12 @@ func (stack *Stack) Reset(ctx context.Context) error {
 		return fmt.Errorf("open reset database connection: %w", err)
 	}
 	defer pool.Close()
+	// Include the flight/mission dependents in the same statement: PostgreSQL
+	// rejects TRUNCATE when a referencing table is omitted, even when it is empty.
+	// Keep aircraft seed data for the next scenario and avoid unbounded CASCADE.
 	if _, err := pool.Exec(ctx, `
-		TRUNCATE received_peer_notifications, peer_notifications,
+		TRUNCATE mission_deployments, mission_items, missions, flight_records,
+		received_peer_notifications, peer_notifications,
 		operational_intent_publications, conflict_findings,
 		operational_volumes, operational_intents`); err != nil {
 		return fmt.Errorf("reset Aero Arc state: %w", err)
