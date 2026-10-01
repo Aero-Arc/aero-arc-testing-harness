@@ -13,6 +13,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Aero-Arc/aero-arc-test-harness/internal/testfleet"
 	"github.com/docker/go-connections/nat"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/network"
@@ -247,6 +248,11 @@ func Start(ctx context.Context, config Config) (_ *Environment, err error) {
 	if err != nil {
 		return nil, err
 	}
+	for _, p := range []Participant{environment.USSA, environment.USSB} {
+		if err := testfleet.Seed(ctx, p.APIBaseURL); err != nil {
+			return nil, err
+		}
+	}
 	if err := environment.writeManifest(config); err != nil {
 		return nil, err
 	}
@@ -292,7 +298,7 @@ func apiEnvironment(suffix, alias, databaseAlias string) map[string]string {
 		"AERO_API_TELEMETRY_STORE":              "memory",
 		"AERO_API_REPLAY_STORE":                 "memory",
 		"AERO_API_REGISTRY_MODE":                "memory",
-		"AERO_API_SEED":                         "demo",
+		"AERO_API_SEED":                         "none",
 	}
 }
 

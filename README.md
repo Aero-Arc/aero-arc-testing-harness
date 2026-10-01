@@ -193,7 +193,7 @@ Mozilla Public License 2.0. See [LICENSE](LICENSE).
 
 ## Durable command/finalization candidate
 
-CI pins API `44f73143b0d3c1c168147cf6b652e485b6defb79` (flight-finalization)
+CI pins API `6b5ec7030a26940160807065ec457d4e92b6a242` (flight-finalization)
 for both fixture and real-DSS tiers. Local runs select the same source through
 `AERO_ARC_API_SOURCE`. Reset explicitly clears command events, attempts, dispatch
 outboxes, flight completions and finalized-event outboxes together with their
@@ -201,3 +201,10 @@ flight/intent parents, preserving aircraft seed data and avoiding CASCADE.
 `TestReset` exercises populated and repeated resets against the actual schema.
 The PostGIS child readiness checks share the configured startup budget; an
 expired budget fails the run rather than skipping scenarios.
+
+Federation stacks start with `AERO_API_SEED=none` and create only their test
+fleet prerequisites (aircraft and installed battery) through the API. They do
+not import the historical dashboard demo's active flight without durable start
+authority. Replacement API containers reuse those persisted prerequisites.
+The nine deterministic scenarios passed against the pinned API above with seed
+20261001 after this change; real-DSS execution remains a separate opt-in run.

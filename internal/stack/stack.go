@@ -11,6 +11,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Aero-Arc/aero-arc-test-harness/internal/testfleet"
 	"github.com/docker/go-connections/nat"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
@@ -178,7 +179,7 @@ func Start(ctx context.Context, config Config) (_ *Stack, err error) {
 		FromDockerfile: testcontainers.FromDockerfile{
 			Context: config.APISource, Dockerfile: "Dockerfile", Repo: "aero-arc-api", Tag: "e2e", KeepImage: true,
 		},
-		Env:          apiEnvironment("demo"),
+		Env:          apiEnvironment("none"),
 		Files:        apiFiles(config.RootDir),
 		ExposedPorts: []string{"8080/tcp"}, Labels: labels,
 		WaitingFor: wait.ForHTTP("/readyz").WithPort("8080/tcp").WithStartupTimeout(config.StartupLimit),
@@ -196,6 +197,9 @@ func Start(ctx context.Context, config Config) (_ *Stack, err error) {
 		return nil, err
 	}
 	stack.DatabaseURL = fmt.Sprintf("postgres://aero_arc:aero_arc_test@%s/aero_arc?sslmode=disable", postGISEndpoint)
+	if err := testfleet.Seed(ctx, stack.APIBaseURL); err != nil {
+		return nil, err
+	}
 	if err := stack.writeManifest(); err != nil {
 		return nil, err
 	}
