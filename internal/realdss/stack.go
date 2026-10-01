@@ -261,8 +261,8 @@ func (environment *Environment) startPostGIS(ctx context.Context, alias string, 
 		},
 		ExposedPorts: []string{"5432/tcp"}, Labels: labels,
 		WaitingFor: wait.ForAll(
-			wait.ForLog("PostgreSQL init process complete; ready for start up."),
-			wait.ForExec([]string{"pg_isready", "-U", "aero_arc", "-d", "aero_arc"}),
+			wait.ForLog("PostgreSQL init process complete; ready for start up.").WithStartupTimeout(startupLimit),
+			wait.ForExec([]string{"pg_isready", "-U", "aero_arc", "-d", "aero_arc"}).WithStartupTimeout(startupLimit),
 		).WithDeadline(startupLimit),
 	})
 	if err != nil {
