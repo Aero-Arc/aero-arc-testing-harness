@@ -52,6 +52,15 @@ func TestReset(t *testing.T) {
 			(id, flight_id, mission_id, idempotency_key, idempotency_request_hash, status, created_at, updated_at, data)
 			SELECT 'reset-deployment', flight_id, id, 'reset-deployment-key', repeat('0', 64), 'completed', now(), now(), '{}'
 			FROM missions WHERE intent_id = $1`,
+		`INSERT INTO commands(id,operator_id,aircraft_id,flight_id,idempotency_key,request_hash,digest,payload,data,state,expires_at)
+          SELECT 'reset-command',operator_id,aircraft_id,id,'reset-command-key','hash','digest','payload','{}','rejected',now() FROM flight_records WHERE intent_id=$1`,
+		`INSERT INTO command_events(event_id,command_id,stage,occurred_at,source,message)
+          SELECT 'reset-event','reset-command','rejected',now(),'test','test' WHERE EXISTS(SELECT 1 FROM flight_records WHERE intent_id=$1)`,
+		`INSERT INTO command_outbox(command_id,done) SELECT 'reset-command',true WHERE EXISTS(SELECT 1 FROM flight_records WHERE intent_id=$1)`,
+		`INSERT INTO command_attempts(command_id,attempt) SELECT 'reset-command',1 WHERE EXISTS(SELECT 1 FROM flight_records WHERE intent_id=$1)`,
+		`INSERT INTO flight_completions(event_id,flight_id,digest,payload,state)
+          SELECT 'reset-completion',id,'digest','payload','complete' FROM flight_records WHERE intent_id=$1`,
+		`INSERT INTO flight_finalized_outbox(event_id,flight_id) SELECT 'reset-completion',id FROM flight_records WHERE intent_id=$1`,
 	} {
 		result, err := pool.Exec(ctx, statement, intentID)
 		if err != nil {
@@ -69,6 +78,7 @@ func TestReset(t *testing.T) {
 			t.Fatalf("reset attempt %d: %v", attempt, err)
 		}
 		for _, table := range []string{
+			"commands", "command_events", "command_outbox", "command_attempts", "flight_completions", "flight_finalized_outbox",
 			"mission_deployments", "mission_items", "missions", "flight_records",
 			"received_peer_notifications", "peer_notifications", "operational_intent_publications",
 			"conflict_findings", "operational_volumes", "operational_intents",

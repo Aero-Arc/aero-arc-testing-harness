@@ -34,6 +34,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: Aero-Arc/aero-arc-api
+          ref: ef16b3b09c1ce3274ec46ec4a35e3c92a0579422
           path: aero-arc-api
       - uses: actions/setup-go@v5
         with:
