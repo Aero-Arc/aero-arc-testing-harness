@@ -193,7 +193,7 @@ Mozilla Public License 2.0. See [LICENSE](LICENSE).
 
 ## Durable command/finalization candidate
 
-CI pins API `6b5ec7030a26940160807065ec457d4e92b6a242` (flight-finalization)
+CI pins API `34c53dde0fecd112e9932fc8c9e070a5b6d0340e` (flight-finalization)
 for both fixture and real-DSS tiers. Local runs select the same source through
 `AERO_ARC_API_SOURCE`. Reset explicitly clears command events, attempts, dispatch
 outboxes, flight completions and finalized-event outboxes together with their
