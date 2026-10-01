@@ -48,7 +48,8 @@ func (stack *Stack) Reset(ctx context.Context) error {
 	// rejects TRUNCATE when a referencing table is omitted, even when it is empty.
 	// Keep aircraft seed data for the next scenario and avoid unbounded CASCADE.
 	if _, err := pool.Exec(ctx, `
-		TRUNCATE mission_deployments, mission_items, missions, flight_records,
+		TRUNCATE flight_finalized_outbox, flight_completions,
+        command_events, command_attempts, command_outbox, commands, mission_deployments, mission_items, missions, flight_records,
 		received_peer_notifications, peer_notifications,
 		operational_intent_publications, conflict_findings,
 		operational_volumes, operational_intents`); err != nil {
@@ -127,8 +128,8 @@ func Start(ctx context.Context, config Config) (_ *Stack, err error) {
 		Env:          map[string]string{"POSTGRES_DB": "aero_arc", "POSTGRES_USER": "aero_arc", "POSTGRES_PASSWORD": "aero_arc_test"},
 		ExposedPorts: []string{"5432/tcp"}, Labels: labels,
 		WaitingFor: wait.ForAll(
-			wait.ForLog("PostgreSQL init process complete; ready for start up."),
-			wait.ForExec([]string{"pg_isready", "-U", "aero_arc", "-d", "aero_arc"}),
+			wait.ForLog("PostgreSQL init process complete; ready for start up.").WithStartupTimeout(config.StartupLimit),
+			wait.ForExec([]string{"pg_isready", "-U", "aero_arc", "-d", "aero_arc"}).WithStartupTimeout(config.StartupLimit),
 		).WithDeadline(config.StartupLimit),
 	})
 	if startErr != nil {
